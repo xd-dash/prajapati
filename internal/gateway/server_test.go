@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/xd-dash/prajapati/authz"
 )
 
 type fakeVerifier struct {
@@ -104,5 +106,39 @@ func TestGenerateDataKey(t *testing.T) {
 	got := request(t, newTestHandler(t, allowed), http.MethodPost, "/v1/keys/key/generate-data-key", "credential", "")
 	if got.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", got.Code, got.Body.String())
+	}
+}
+
+func TestAuthorizationUsesActionAndResource(t *testing.T) {
+	policy := authz.Policy{
+		Version:   1,
+		Actions:   []string{"kms.decrypt"},
+		Resources: []string{"kms:key/axiom-token"},
+		Audiences: []string{"kms://fatline/world-17"},
+	}
+	verifier := fakeVerifier{principal: Principal{
+		ID:       "ed25519:logma/world-17",
+		Issuer:   "farcaster/world-17",
+		Audience: "kms://fatline/world-17",
+	}}
+	handler, err := New(Config{
+		Audience:         "kms://fatline/world-17",
+		AllowedPrincipal: "ed25519:logma/world-17",
+		Policy:           &policy,
+		MaxBodyBytes:     1024,
+	}, verifier, fakeKMS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"data":"` + base64.StdEncoding.EncodeToString([]byte("ciphertext")) + `"}`
+
+	if got := request(t, handler, http.MethodPost, "/v1/keys/axiom-token/decrypt", "credential", body); got.Code != http.StatusOK {
+		t.Fatalf("allowed decrypt status=%d body=%s", got.Code, got.Body.String())
+	}
+	if got := request(t, handler, http.MethodPost, "/v1/keys/axiom-token/encrypt", "credential", body); got.Code != http.StatusForbidden {
+		t.Fatalf("disallowed action status=%d body=%s", got.Code, got.Body.String())
+	}
+	if got := request(t, handler, http.MethodPost, "/v1/keys/gdrive-token/decrypt", "credential", body); got.Code != http.StatusForbidden {
+		t.Fatalf("disallowed resource status=%d body=%s", got.Code, got.Body.String())
 	}
 }
