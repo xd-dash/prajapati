@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/xd-dash/atman/internal/googlemint"
-	"github.com/xd-dash/atman/internal/tenant"
+	"github.com/xd-dash/prajapati/internal/googlemint"
+	"github.com/xd-dash/prajapati/internal/tenant"
 )
 
 const maxRequestBytes = 1 << 10

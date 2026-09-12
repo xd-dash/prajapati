@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/xd-dash/atman/internal/identity"
+	"github.com/xd-dash/prajapati/authz"
+	"github.com/xd-dash/prajapati/internal/identity"
 )
 
 type Principal = identity.Principal
@@ -25,12 +26,23 @@ type KMS interface {
 type Config struct {
 	Audience         string
 	AllowedPrincipal string
+	Policy           *authz.Policy
 	MaxBodyBytes     int64
 }
 
+type PrincipalBinding struct {
+	Principal string
+	Policy    *authz.Policy
+}
+
 type TenantRoute struct {
-	TenantID   string
-	Audiences  []string
+	TenantID  string
+	Audiences []string
+
+	// Bindings is the canonical semantic authorization model. Principals is a
+	// compatibility field for existing Atman/Prajapati smoke configurations;
+	// legacy principals retain the pre-policy application behavior.
+	Bindings   []PrincipalBinding
 	Principals []string
 	KMS        KMS
 }
@@ -49,6 +61,7 @@ type server struct {
 }
 
 type kmsContextKey struct{}
+type bindingContextKey struct{}
 
 func New(cfg Config, verifier Verifier, kms KMS) (http.Handler, error) {
 	if cfg.Audience == "" || cfg.AllowedPrincipal == "" {
@@ -64,6 +77,20 @@ func New(cfg Config, verifier Verifier, kms KMS) (http.Handler, error) {
 	return s.handler(s.authorize), nil
 }
 
+func (route TenantRoute) effectiveBindings() ([]PrincipalBinding, error) {
+	if len(route.Bindings) != 0 && len(route.Principals) != 0 {
+		return nil, errors.New("tenant route cannot configure both bindings and legacy principals")
+	}
+	if len(route.Bindings) != 0 {
+		return route.Bindings, nil
+	}
+	bindings := make([]PrincipalBinding, 0, len(route.Principals))
+	for _, principal := range route.Principals {
+		bindings = append(bindings, PrincipalBinding{Principal: principal})
+	}
+	return bindings, nil
+}
+
 func NewMulti(cfg MultiConfig, verifier Verifier) (http.Handler, error) {
 	if cfg.MaxBodyBytes < 1 {
 		return nil, errors.New("max body bytes must be positive")
@@ -77,18 +104,22 @@ func NewMulti(cfg MultiConfig, verifier Verifier) (http.Handler, error) {
 	seen := make(map[string]string)
 	health := make([]KMS, 0, len(cfg.Routes))
 	for _, route := range cfg.Routes {
-		if route.TenantID == "" || len(route.Audiences) == 0 || len(route.Principals) == 0 || route.KMS == nil {
-			return nil, errors.New("tenant route requires tenant id, audiences, principals, and KMS")
+		bindings, err := route.effectiveBindings()
+		if err != nil {
+			return nil, err
+		}
+		if route.TenantID == "" || len(route.Audiences) == 0 || len(bindings) == 0 || route.KMS == nil {
+			return nil, errors.New("tenant route requires tenant id, audiences, principal bindings, and KMS")
 		}
 		for _, audience := range route.Audiences {
 			if audience == "" {
 				return nil, errors.New("tenant route audience is empty")
 			}
-			for _, principal := range route.Principals {
-				if principal == "" {
+			for _, binding := range bindings {
+				if binding.Principal == "" {
 					return nil, errors.New("tenant route principal is empty")
 				}
-				key := audience + "\x00" + principal
+				key := audience + "\x00" + binding.Principal
 				if existing, ok := seen[key]; ok && existing != route.TenantID {
 					return nil, errors.New("ambiguous audience and principal mapping")
 				}
@@ -132,6 +163,40 @@ func bearerToken(r *http.Request) (string, bool) {
 	return header[7:], true
 }
 
+func semanticRequest(r *http.Request, audience string) (authz.Request, error) {
+	key := r.PathValue("key")
+	if key == "" {
+		return authz.Request{}, errors.New("missing key resource")
+	}
+	action := ""
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/encrypt"):
+		action = "kms.encrypt"
+	case strings.HasSuffix(r.URL.Path, "/decrypt"):
+		action = "kms.decrypt"
+	case strings.HasSuffix(r.URL.Path, "/generate-data-key"):
+		action = "kms.generate-data-key"
+	default:
+		return authz.Request{}, errors.New("unknown KMS action")
+	}
+	return authz.Request{
+		Audience: audience,
+		Action:   action,
+		Resource: "kms:key/" + key,
+	}, nil
+}
+
+func authorizePolicy(r *http.Request, audience string, policy *authz.Policy) error {
+	if policy == nil {
+		return nil // compatibility path for pre-policy Atman/Prajapati smoke.
+	}
+	request, err := semanticRequest(r, audience)
+	if err != nil {
+		return err
+	}
+	return policy.Authorize(request)
+}
+
 func (s *server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r)
@@ -148,6 +213,10 @@ func (s *server) authorize(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "principal is not authorized")
 			return
 		}
+		if err := authorizePolicy(r, principal.Audience, s.cfg.Policy); err != nil {
+			writeError(w, http.StatusForbidden, "operation is not authorized")
+			return
+		}
 		next(w, r)
 	}
 }
@@ -160,27 +229,32 @@ func (s *server) authorizeMulti(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		for _, route := range s.routes {
+			bindings, err := route.effectiveBindings()
+			if err != nil {
+				continue
+			}
 			for _, audience := range route.Audiences {
 				principal, err := s.verifier.Verify(r.Context(), token, audience)
-				if err != nil || principal.Audience != audience || !contains(route.Principals, principal.ID) {
+				if err != nil || principal.Audience != audience {
 					continue
 				}
-				ctx := context.WithValue(r.Context(), kmsContextKey{}, route.KMS)
-				next(w, r.WithContext(ctx))
-				return
+				for _, binding := range bindings {
+					if binding.Principal != principal.ID {
+						continue
+					}
+					if err := authorizePolicy(r, principal.Audience, binding.Policy); err != nil {
+						writeError(w, http.StatusForbidden, "operation is not authorized")
+						return
+					}
+					ctx := context.WithValue(r.Context(), kmsContextKey{}, route.KMS)
+					ctx = context.WithValue(ctx, bindingContextKey{}, binding)
+					next(w, r.WithContext(ctx))
+					return
+				}
 			}
 		}
 		writeError(w, http.StatusForbidden, "principal is not authorized")
 	}
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 type dataRequest struct {

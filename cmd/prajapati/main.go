@@ -1,6 +1,3 @@
-// Command atman is a temporary compatibility entrypoint for existing Huram
-// smoke compositions. New deployments should use cmd/prajapati. Runtime
-// configuration is canonicalized on PRAJAPATI_*; ATMAN_* remains fallback-only.
 package main
 
 import (
@@ -61,7 +58,6 @@ func identityVerifier() (identity.Verifier, error) {
 	if configured == "" {
 		configured = "google"
 	}
-
 	providers := strings.Split(configured, ",")
 	chain := make(identity.Chain, 0, len(providers))
 	seen := make(map[string]struct{}, len(providers))
@@ -148,10 +144,7 @@ func buildHandler() (http.Handler, error) {
 				KMS:       kms,
 			})
 		}
-		return gateway.NewMulti(gateway.MultiConfig{
-			MaxBodyBytes: maxBody,
-			Routes:       routes,
-		}, verifier)
+		return gateway.NewMulti(gateway.MultiConfig{MaxBodyBytes: maxBody, Routes: routes}, verifier)
 	}
 
 	user := required("MARAI_REDIS_USER")
@@ -184,7 +177,6 @@ func main() {
 		slog.Error("configure Prajapati gateway", "error", err)
 		os.Exit(2)
 	}
-
 	listen := env("PRAJAPATI_LISTEN", "ATMAN_LISTEN")
 	if listen == "" {
 		listen = ":8443"
@@ -197,11 +189,8 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13,
-		},
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
 	}
-
 	errs := make(chan error, 1)
 	go func() {
 		certFile := env("PRAJAPATI_TLS_CERT_FILE", "ATMAN_TLS_CERT_FILE")
@@ -216,7 +205,6 @@ func main() {
 		}
 		errs <- server.ListenAndServeTLS(certFile, keyFile)
 	}()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	select {
@@ -227,7 +215,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xd-dash/atman/internal/identity"
+	"github.com/xd-dash/prajapati/internal/identity"
 )
 
 const credentialVersion = "AT1"
