@@ -19,42 +19,29 @@ func (v tokenVerifier) Verify(_ context.Context, credential, audience string) (P
 	return principal, nil
 }
 
-func policy(actions, resources ...string) *authz.Policy {
-	actionCount := len(actions) / 2
-	if actionCount == 0 {
-		actionCount = 1
-	}
-	return &authz.Policy{
-		Version:   1,
-		Actions:   append([]string(nil), actions[:actionCount]...),
-		Resources: append([]string(nil), resources...),
-		Audiences: []string{"kms://fatline/world-17"},
-	}
-}
-
 func TestFatlineComponentPrincipalsHaveIndependentAuthority(t *testing.T) {
 	logmaPolicy := &authz.Policy{
-		Version: 1,
-		Actions: []string{"kms.decrypt"},
+		Version:   1,
+		Actions:   []string{"kms.decrypt"},
 		Resources: []string{"kms:key/logma-secret"},
 		Audiences: []string{"kms://fatline/world-17"},
 	}
 	callbackPolicy := &authz.Policy{
-		Version: 1,
-		Actions: []string{"kms.encrypt"},
+		Version:   1,
+		Actions:   []string{"kms.encrypt"},
 		Resources: []string{"kms:key/callback-secret"},
 		Audiences: []string{"kms://fatline/world-17"},
 	}
 	gatewayPolicy := &authz.Policy{
-		Version: 1,
-		Actions: []string{"kms.generate-data-key"},
+		Version:   1,
+		Actions:   []string{"kms.generate-data-key"},
 		Resources: []string{"kms:key/gateway-key"},
 		Audiences: []string{"kms://fatline/world-17"},
 	}
 	verifier := tokenVerifier{
-		"logma": {ID: "ed25519:logma/world-17", Issuer: "farcaster/world-17", Audience: "kms://fatline/world-17"},
+		"logma":    {ID: "ed25519:logma/world-17", Issuer: "farcaster/world-17", Audience: "kms://fatline/world-17"},
 		"callback": {ID: "ed25519:callback/axiom/world-17", Issuer: "farcaster/world-17", Audience: "kms://fatline/world-17"},
-		"gateway": {ID: "ed25519:gateway/world-17", Issuer: "farcaster/world-17", Audience: "kms://fatline/world-17"},
+		"gateway":  {ID: "ed25519:gateway/world-17", Issuer: "farcaster/world-17", Audience: "kms://fatline/world-17"},
 	}
 	handler, err := NewMulti(MultiConfig{
 		MaxBodyBytes: 1024,
