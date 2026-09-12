@@ -134,8 +134,6 @@ func buildHandler() (http.Handler, error) {
 			}
 			bindings := make([]gateway.PrincipalBinding, 0, len(tenant.EffectiveBindings()))
 			for _, binding := range tenant.EffectiveBindings() {
-				var policy = (*gatewayPolicyAlias)(nil)
-				_ = policy
 				gatewayBinding := gateway.PrincipalBinding{Principal: binding.Principal}
 				if binding.AuthProfile != "" {
 					policyCopy := binding.AuthPolicy
@@ -179,11 +177,6 @@ func buildHandler() (http.Handler, error) {
 		MaxBodyBytes:     maxBody,
 	}, verifier, kms)
 }
-
-// gatewayPolicyAlias is intentionally private and unused except as a compile-time
-// guard against accidentally moving policy ownership into runtime configuration.
-// Semantic policy values flow through gateway.PrincipalBinding from authz.Policy.
-type gatewayPolicyAlias struct{}
 
 func main() {
 	handler, err := buildHandler()
