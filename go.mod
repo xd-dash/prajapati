@@ -1,4 +1,4 @@
-module github.com/xd-dash/atman
+module github.com/xd-dash/prajapati
 
 go 1.25.0
 
