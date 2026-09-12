@@ -9,7 +9,7 @@ package router
 import (
 	"net/http"
 
-	"github.com/xd-dash/atman/internal/handler"
+	"github.com/xd-dash/prajapati/internal/handler"
 )
 
 // NewRouter returns the token-minter's http.Handler.
