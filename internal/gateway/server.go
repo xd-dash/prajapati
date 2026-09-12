@@ -36,7 +36,7 @@ type PrincipalBinding struct {
 }
 
 type TenantRoute struct {
-	TenantID string
+	TenantID  string
 	Audiences []string
 
 	// Bindings is the canonical semantic authorization model. Principals is a
