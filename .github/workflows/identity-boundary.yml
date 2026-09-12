@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'authz/**'
+      - 'cmd/prajapati/**'
       - 'cmd/atman/**'
       - 'cmd/mint-token/**'
       - 'internal/gateway/**'
@@ -28,9 +30,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - run: go mod download
-      - name: Check formatting for identity and Google compatibility boundaries
-        run: test -z "$(gofmt -l cmd/atman cmd/mint-token internal/gateway internal/googlemint internal/handler internal/identity internal/tenantregistry)"
-      - name: Vet identity and Google compatibility boundaries
-        run: go vet ./cmd/atman ./cmd/mint-token ./internal/gateway ./internal/googlemint ./internal/handler ./internal/identity/... ./internal/tenantregistry
-      - name: Test identity and Google compatibility boundaries
-        run: go test ./cmd/atman ./cmd/mint-token ./internal/gateway ./internal/googlemint ./internal/handler ./internal/identity/... ./internal/tenantregistry
+      - name: Check formatting for semantic authz, identity, and Google compatibility boundaries
+        run: test -z "$(gofmt -l authz cmd/prajapati cmd/atman cmd/mint-token internal/gateway internal/googlemint internal/handler internal/identity internal/tenantregistry)"
+      - name: Vet semantic authz, identity, and Google compatibility boundaries
+        run: go vet ./authz ./cmd/prajapati ./cmd/atman ./cmd/mint-token ./internal/gateway ./internal/googlemint ./internal/handler ./internal/identity/... ./internal/tenantregistry
+      - name: Test semantic authz, identity, and Google compatibility boundaries
+        run: go test ./authz ./cmd/prajapati ./cmd/atman ./cmd/mint-token ./internal/gateway ./internal/googlemint ./internal/handler ./internal/identity/... ./internal/tenantregistry
