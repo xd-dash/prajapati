@@ -1,3 +1,6 @@
+// Command atman is a temporary compatibility entrypoint for existing Huram
+// smoke compositions. New deployments should use cmd/prajapati. Runtime
+// configuration is canonicalized on PRAJAPATI_*; ATMAN_* remains fallback-only.
 package main
 
 import (
@@ -14,25 +17,37 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xd-dash/atman/internal/gateway"
-	"github.com/xd-dash/atman/internal/identity"
-	ed25519identity "github.com/xd-dash/atman/internal/identity/ed25519"
-	googleidentity "github.com/xd-dash/atman/internal/identity/google"
-	"github.com/xd-dash/atman/internal/marai"
-	"github.com/xd-dash/atman/internal/tenantregistry"
+	"github.com/xd-dash/prajapati/internal/gateway"
+	"github.com/xd-dash/prajapati/internal/identity"
+	ed25519identity "github.com/xd-dash/prajapati/internal/identity/ed25519"
+	googleidentity "github.com/xd-dash/prajapati/internal/identity/google"
+	"github.com/xd-dash/prajapati/internal/marai"
+	"github.com/xd-dash/prajapati/internal/tenantregistry"
 )
 
-func required(name string) string {
-	value := os.Getenv(name)
+func env(canonical string, legacy ...string) string {
+	if value := os.Getenv(canonical); value != "" {
+		return value
+	}
+	for _, name := range legacy {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func required(canonical string, legacy ...string) string {
+	value := env(canonical, legacy...)
 	if value == "" {
-		slog.Error("required environment variable is missing", "name", name)
+		slog.Error("required environment variable is missing", "name", canonical)
 		os.Exit(2)
 	}
 	return value
 }
 
 func allowedPrincipal() string {
-	if principal := os.Getenv("ATMAN_ALLOWED_PRINCIPAL"); principal != "" {
+	if principal := env("PRAJAPATI_ALLOWED_PRINCIPAL", "ATMAN_ALLOWED_PRINCIPAL"); principal != "" {
 		return principal
 	}
 	if serviceAccount := os.Getenv("ATMAN_ALLOWED_SERVICE_ACCOUNT"); serviceAccount != "" {
@@ -42,10 +57,7 @@ func allowedPrincipal() string {
 }
 
 func identityVerifier() (identity.Verifier, error) {
-	configured := os.Getenv("ATMAN_IDENTITY_PROVIDERS")
-	if configured == "" {
-		configured = os.Getenv("ATMAN_IDENTITY_PROVIDER")
-	}
+	configured := env("PRAJAPATI_IDENTITY_PROVIDERS", "ATMAN_IDENTITY_PROVIDERS", "ATMAN_IDENTITY_PROVIDER")
 	if configured == "" {
 		configured = "google"
 	}
@@ -56,7 +68,7 @@ func identityVerifier() (identity.Verifier, error) {
 	for _, raw := range providers {
 		provider := strings.TrimSpace(raw)
 		if provider == "" {
-			return nil, errors.New("ATMAN_IDENTITY_PROVIDERS contains an empty provider")
+			return nil, errors.New("PRAJAPATI_IDENTITY_PROVIDERS contains an empty provider")
 		}
 		if _, ok := seen[provider]; ok {
 			continue
@@ -66,9 +78,9 @@ func identityVerifier() (identity.Verifier, error) {
 		case "google":
 			chain = append(chain, googleidentity.Verifier{})
 		case "ed25519":
-			path := os.Getenv("ATMAN_ED25519_KEYS_FILE")
+			path := env("PRAJAPATI_ED25519_KEYS_FILE", "ATMAN_ED25519_KEYS_FILE")
 			if path == "" {
-				return nil, errors.New("ATMAN_ED25519_KEYS_FILE is required for ed25519 identity")
+				return nil, errors.New("PRAJAPATI_ED25519_KEYS_FILE is required for ed25519 identity")
 			}
 			verifier, err := ed25519identity.Load(path)
 			if err != nil {
@@ -76,7 +88,7 @@ func identityVerifier() (identity.Verifier, error) {
 			}
 			chain = append(chain, verifier)
 		default:
-			return nil, fmt.Errorf("unsupported Atman identity provider %q", provider)
+			return nil, fmt.Errorf("unsupported Prajapati identity provider %q", provider)
 		}
 	}
 	if len(chain) == 1 {
@@ -87,10 +99,10 @@ func identityVerifier() (identity.Verifier, error) {
 
 func maxBodyBytes() int64 {
 	value := int64(8 << 20)
-	if configured := os.Getenv("ATMAN_MAX_BODY_BYTES"); configured != "" {
+	if configured := env("PRAJAPATI_MAX_BODY_BYTES", "ATMAN_MAX_BODY_BYTES"); configured != "" {
 		parsed, err := strconv.ParseInt(configured, 10, 64)
 		if err != nil || parsed < 1 || parsed > 64<<20 {
-			slog.Error("invalid ATMAN_MAX_BODY_BYTES")
+			slog.Error("invalid PRAJAPATI_MAX_BODY_BYTES")
 			os.Exit(2)
 		}
 		value = parsed
@@ -104,7 +116,7 @@ func buildHandler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	if registryFile := os.Getenv("ATMAN_TENANT_REGISTRY_FILE"); registryFile != "" {
+	if registryFile := env("PRAJAPATI_TENANT_REGISTRY_FILE", "ATMAN_TENANT_REGISTRY_FILE"); registryFile != "" {
 		registry, err := tenantregistry.Load(registryFile)
 		if err != nil {
 			return nil, err
@@ -120,11 +132,22 @@ func buildHandler() (http.Handler, error) {
 			if err != nil {
 				return nil, errors.New("configure marai client for tenant " + tenantID + ": " + err.Error())
 			}
+			bindings := make([]gateway.PrincipalBinding, 0, len(tenant.EffectiveBindings()))
+			for _, binding := range tenant.EffectiveBindings() {
+				var policy = (*gatewayPolicyAlias)(nil)
+				_ = policy
+				gatewayBinding := gateway.PrincipalBinding{Principal: binding.Principal}
+				if binding.AuthProfile != "" {
+					policyCopy := binding.AuthPolicy
+					gatewayBinding.Policy = &policyCopy
+				}
+				bindings = append(bindings, gatewayBinding)
+			}
 			routes = append(routes, gateway.TenantRoute{
-				TenantID:   tenantID,
-				Audiences:  tenant.Audiences,
-				Principals: tenant.EffectivePrincipals(),
-				KMS:        kms,
+				TenantID:  tenantID,
+				Audiences: tenant.Audiences,
+				Bindings:  bindings,
+				KMS:       kms,
 			})
 		}
 		return gateway.NewMulti(gateway.MultiConfig{
@@ -133,9 +156,13 @@ func buildHandler() (http.Handler, error) {
 		}, verifier)
 	}
 
+	user := required("MARAI_REDIS_USER")
+	if user == "marai-admin" {
+		return nil, errors.New("Prajapati must not use marai-admin; configure marai-app")
+	}
 	kms, err := marai.New(marai.Config{
 		Socket:       required("MARAI_REDIS_SOCKET"),
-		User:         required("MARAI_REDIS_USER"),
+		User:         user,
 		PasswordFile: required("MARAI_REDIS_PASSWORD_FILE"),
 		Timeout:      5 * time.Second,
 	})
@@ -144,23 +171,28 @@ func buildHandler() (http.Handler, error) {
 	}
 	principal := allowedPrincipal()
 	if principal == "" {
-		return nil, errors.New("ATMAN_ALLOWED_PRINCIPAL is required (ATMAN_ALLOWED_SERVICE_ACCOUNT remains a Google compatibility alias)")
+		return nil, errors.New("PRAJAPATI_ALLOWED_PRINCIPAL is required (ATMAN_ALLOWED_PRINCIPAL and ATMAN_ALLOWED_SERVICE_ACCOUNT remain compatibility aliases)")
 	}
 	return gateway.New(gateway.Config{
-		Audience:         required("ATMAN_AUDIENCE"),
+		Audience:         required("PRAJAPATI_AUDIENCE", "ATMAN_AUDIENCE"),
 		AllowedPrincipal: principal,
 		MaxBodyBytes:     maxBody,
 	}, verifier, kms)
 }
 
+// gatewayPolicyAlias is intentionally private and unused except as a compile-time
+// guard against accidentally moving policy ownership into runtime configuration.
+// Semantic policy values flow through gateway.PrincipalBinding from authz.Policy.
+type gatewayPolicyAlias struct{}
+
 func main() {
 	handler, err := buildHandler()
 	if err != nil {
-		slog.Error("configure gateway", "error", err)
+		slog.Error("configure Prajapati gateway", "error", err)
 		os.Exit(2)
 	}
 
-	listen := os.Getenv("ATMAN_LISTEN")
+	listen := env("PRAJAPATI_LISTEN", "ATMAN_LISTEN")
 	if listen == "" {
 		listen = ":8443"
 	}
@@ -179,10 +211,11 @@ func main() {
 
 	errs := make(chan error, 1)
 	go func() {
-		certFile, keyFile := os.Getenv("ATMAN_TLS_CERT_FILE"), os.Getenv("ATMAN_TLS_KEY_FILE")
+		certFile := env("PRAJAPATI_TLS_CERT_FILE", "ATMAN_TLS_CERT_FILE")
+		keyFile := env("PRAJAPATI_TLS_KEY_FILE", "ATMAN_TLS_KEY_FILE")
 		if certFile == "" || keyFile == "" {
-			if os.Getenv("ATMAN_ALLOW_INSECURE_HTTP") != "1" {
-				errs <- errors.New("TLS files are required unless ATMAN_ALLOW_INSECURE_HTTP=1")
+			if env("PRAJAPATI_ALLOW_INSECURE_HTTP", "ATMAN_ALLOW_INSECURE_HTTP") != "1" {
+				errs <- errors.New("TLS files are required unless PRAJAPATI_ALLOW_INSECURE_HTTP=1")
 				return
 			}
 			errs <- server.ListenAndServe()
