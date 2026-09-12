@@ -1,7 +1,7 @@
 // Command mint-token mints a short-lived Google token for a target service
 // account by calling internal/googlemint directly - the same package the
 // deployed HTTP token-minter handler uses. This command is Google-specific
-// compatibility tooling and is not part of Atman's provider-neutral gateway.
+// compatibility tooling and is not part of Prajapati's provider-neutral gateway.
 //
 // It uses whatever Application Default Credentials the process already has.
 // That identity needs roles/iam.serviceAccountTokenCreator on -target, either
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xd-dash/atman/internal/googlemint"
+	"github.com/xd-dash/prajapati/internal/googlemint"
 )
 
 func main() {
