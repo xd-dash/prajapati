@@ -1,0 +1,13 @@
+{
+  "tenants": {
+    "logma": {
+      "audiences": ["https://security.internal/logma"],
+      "callers": ["logma-runtime@dashxd.iam.gserviceaccount.com"],
+      "marai": {
+        "socket": "/run/marai/logma/redis.sock",
+        "user": "marai-app",
+        "password_file": "/run/marai/logma/app.password"
+      }
+    }
+  }
+}

@@ -1,0 +1,115 @@
+name: "Mint Tenant Token"
+description: >-
+  Mints a short-lived GCP token for a tenant's service account by running
+  this repo's cmd/mint-token locally in the calling job - no deployed
+  Cloud Function involved. Uses whatever Application Default Credentials
+  the calling job already has (typically Workload Identity Federation as
+  huram-abi's `terraform` service account). That identity must hold
+  roles/iam.serviceAccountTokenCreator on minter-service-account (see
+  terraform/token-minter's minter_impersonators variable), and
+  minter-service-account must in turn hold it on target-service-account
+  (see the tenants variable) - this action supplies minter-service-account
+  as the delegate in that chain, so the calling identity never needs a
+  direct grant on target-service-account itself.
+inputs:
+  target-service-account:
+    description: "Email of the tenant service account to mint a token for"
+    required: true
+  minter-service-account:
+    description: >-
+      Email of the token-minter service account (terraform output:
+      token_minter_service_account) to delegate through. Leave blank only
+      if the calling identity has been granted
+      roles/iam.serviceAccountTokenCreator directly on
+      target-service-account instead.
+    required: false
+    default: ""
+  kind:
+    description: '"access" or "id"'
+    required: false
+    default: "id"
+  scopes:
+    description: "Comma-separated OAuth scopes (access tokens only)"
+    required: false
+    default: "https://www.googleapis.com/auth/cloud-platform"
+  audience:
+    description: >-
+      Audience (id tokens only, required when kind is "id") - typically
+      the tenant's Cloud Function/Cloud Run URL, since that's what its
+      built-in authentication checks an ID token's audience against.
+    required: false
+    default: ""
+  lifetime:
+    description: "Access token lifetime (access tokens only), Go duration syntax"
+    required: false
+    default: "10m"
+  include-email:
+    description: "Include the target service-account email in ID tokens"
+    required: false
+    default: "true"
+  ref:
+    description: "Branch/tag/commit of xd-dash/atman to run cmd/mint-token from"
+    required: false
+    default: "main"
+
+outputs:
+  token:
+    description: "The minted token"
+    value: ${{ steps.mint.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out atman
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        repository: xd-dash/atman
+        ref: ${{ inputs.ref }}
+        path: mint-token-atman
+        persist-credentials: false
+
+    - name: Set up Go
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      with:
+        go-version-file: mint-token-atman/go.mod
+        cache: false
+
+    - name: Mint token
+      id: mint
+      shell: bash
+      working-directory: mint-token-atman
+      env:
+        TARGET_SERVICE_ACCOUNT: ${{ inputs.target-service-account }}
+        MINTER_SERVICE_ACCOUNT: ${{ inputs.minter-service-account }}
+        TOKEN_KIND: ${{ inputs.kind }}
+        TOKEN_SCOPES: ${{ inputs.scopes }}
+        TOKEN_AUDIENCE: ${{ inputs.audience }}
+        TOKEN_LIFETIME: ${{ inputs.lifetime }}
+        TOKEN_INCLUDE_EMAIL: ${{ inputs.include-email }}
+      run: |
+        set -euo pipefail
+
+        args=(
+          -target "$TARGET_SERVICE_ACCOUNT"
+          -kind "$TOKEN_KIND"
+          -scopes "$TOKEN_SCOPES"
+          -lifetime "$TOKEN_LIFETIME"
+        )
+
+        if [ -n "$MINTER_SERVICE_ACCOUNT" ]; then
+          args+=(-delegate "$MINTER_SERVICE_ACCOUNT")
+        fi
+
+        if [ -n "$TOKEN_AUDIENCE" ]; then
+          args+=(-audience "$TOKEN_AUDIENCE")
+        fi
+
+        if [ "$TOKEN_INCLUDE_EMAIL" = "true" ]; then
+          args+=(-include-email)
+        fi
+
+        token="$(go run ./cmd/mint-token "${args[@]}" 2>mint.log)"
+        cat mint.log >&2
+
+        echo "::add-mask::$token"
+        echo "token=$token" >> "$GITHUB_OUTPUT"

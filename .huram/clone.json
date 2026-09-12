@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "kind": "huram.repository-clone.v1",
+  "history": "squashed-root",
+  "source": {
+    "repository": "xd-dash/atman",
+    "sha": "09c5962d29727f10b9689b7bfa2347bea335902d",
+    "preserved": true
+  },
+  "target": {
+    "repository": "xd-dash/prajapati"
+  },
+  "control": {
+    "repository": "xd-dash/huram-abi-master",
+    "sha": "6a94d444eae0c6836293b4ad7df954e1ee8c0959",
+    "run_id": "34676374533"
+  }
+}

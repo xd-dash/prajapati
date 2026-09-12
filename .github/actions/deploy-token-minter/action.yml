@@ -1,0 +1,209 @@
+name: "Deploy token-minter Cloud Function"
+description: >-
+  Checks out this repo and dash-xd/gospace-minimal, points the latter's
+  router drop-in at this repo's router package, and deploys the result as
+  a GCP Cloud Function (gen2) via terraform/token-minter, using whatever
+  GCP identity is already authenticated in the calling job. Meant to be
+  called remotely - e.g. from xd-dash/huram-abi-master's own
+  deploy-token-minter.yml workflow - so this repo owns its own deploy
+  logic instead of huram-abi needing a copy of it.
+inputs:
+  project_id:
+    description: "GCP project ID"
+    required: true
+  region:
+    description: "GCP region for the Cloud Function"
+    required: false
+    default: "us-central1"
+  function_name:
+    description: "Cloud Function name"
+    required: false
+    default: "token-minter"
+  minter_service_account_id:
+    description: "Account ID (local part of the email) for the token-minter service account"
+    required: false
+    default: "token-minter"
+  min_instances:
+    description: "Minimum concurrent instances to keep warm"
+    required: false
+    default: "0"
+  max_instances:
+    description: "Maximum concurrent instances for the deployed function"
+    required: false
+    default: "10"
+  runtime:
+    description: >-
+      Cloud Functions Go runtime identifier (e.g. "go126"). Rotates on
+      Google's decommission schedule - see terraform/token-minter's
+      runtime variable description for how to find the current one if
+      deploy fails with DEPLOYS_NOT_ALLOWED.
+    required: false
+    default: "go126"
+  gospace_minimal_ref:
+    description: "Branch/tag/commit of dash-xd/gospace-minimal to deploy"
+    required: false
+    default: "main"
+  atman_ref:
+    description: "Branch/tag/commit of this repo to deploy the router and terraform module from"
+    required: false
+    default: "main"
+  tenants_json:
+    description: >-
+      JSON object mapping tenant_id -> {service_account_email,
+      create_service_account, audience, api_key}, matching
+      terraform/token-minter's `tenants` variable.
+      Typically sourced from a repo/org secret in the calling workflow.
+      Defaults to "{}" (no tenants provisioned - just the minter identity
+      and the function).
+    required: false
+    default: "{}"
+  minter_impersonators:
+    description: >-
+      Comma-separated IAM members allowed to impersonate the token-minter
+      service account directly, e.g.
+      "serviceAccount:terraform@PROJECT.iam.gserviceaccount.com" - so the
+      mint-token action can mint tenant tokens locally in CI. Leave blank
+      for none.
+    required: false
+    default: ""
+  state_bucket:
+    description: "GCS bucket for locked, durable Terraform state"
+    required: true
+  apply:
+    description: "Set to \"true\" to apply after planning; otherwise this only plans."
+    required: false
+    default: "false"
+
+outputs:
+  function_url:
+    description: "HTTPS trigger URL for the deployed token-minter function (apply only)"
+    value: ${{ steps.outputs.outputs.function_url }}
+  token_minter_service_account:
+    description: "Email of the deployed token-minter service account (apply only)"
+    value: ${{ steps.outputs.outputs.token_minter_service_account }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out this repo's router + terraform module
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        repository: xd-dash/atman
+        ref: ${{ inputs.atman_ref }}
+        path: token-minter-atman
+        persist-credentials: false
+
+    - name: Check out gospace-minimal
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        repository: dash-xd/gospace-minimal
+        ref: ${{ inputs.gospace_minimal_ref }}
+        path: token-minter-shell
+        persist-credentials: false
+
+    # Points gospace-minimal's router drop-in at this repo's router
+    # package via a small shim that just calls router.NewRouter() - the
+    # actual routing/handler logic lives entirely in this repo's router/
+    # and internal/ packages, never inlined here.
+    - name: Point gospace-minimal at this repo's router
+      uses: ./token-minter-shell/.github/actions/router
+      with:
+        source-content: |
+          package source
+
+          import (
+            "net/http"
+
+            atmanrouter "github.com/xd-dash/atman/router"
+          )
+
+          func NewRouter() http.Handler {
+            return atmanrouter.NewRouter()
+          }
+        build: "false"
+        working-directory: token-minter-shell
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+      with:
+        terraform_version: "1.9.8"
+
+    - name: Terraform init
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      env:
+        STATE_BUCKET: ${{ inputs.state_bucket }}
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="bucket=$STATE_BUCKET" \
+          -backend-config="prefix=terraform/token-minter"
+
+    - name: Terraform validate
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      run: terraform validate
+
+    # Written to a tfvars file (rather than -var) since tenants is a
+    # complex, sensitive, arbitrarily-sized structure - passing it through
+    # a shell -var argument risks both escaping bugs and leaking it into
+    # process listings/logs.
+    - name: Write generated tfvars
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      env:
+        TENANTS_JSON: ${{ inputs.tenants_json }}
+        MINTER_IMPERSONATORS: ${{ inputs.minter_impersonators }}
+      run: |
+        set -euo pipefail
+
+        jq -n --argjson tenants "$TENANTS_JSON" '{tenants: $tenants}' \
+          > generated.auto.tfvars.json
+
+        jq -n --arg csv "$MINTER_IMPERSONATORS" '
+          { minter_impersonators:
+            ( $csv
+              | split(",")
+              | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+              | map(select(length > 0))
+            )
+          }' > minter_impersonators.auto.tfvars.json
+        chmod 0600 generated.auto.tfvars.json minter_impersonators.auto.tfvars.json
+
+    - name: Terraform plan
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      env:
+        TF_VAR_project_id: ${{ inputs.project_id }}
+        TF_VAR_region: ${{ inputs.region }}
+        TF_VAR_function_name: ${{ inputs.function_name }}
+        TF_VAR_minter_service_account_id: ${{ inputs.minter_service_account_id }}
+        TF_VAR_min_instances: ${{ inputs.min_instances }}
+        TF_VAR_max_instances: ${{ inputs.max_instances }}
+        TF_VAR_runtime: ${{ inputs.runtime }}
+        TF_VAR_source_dir: ${{ github.workspace }}/token-minter-shell
+      run: |
+        set -euo pipefail
+        terraform plan -out=tfplan
+
+    - name: Terraform apply
+      if: ${{ inputs.apply == 'true' }}
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      run: terraform apply -auto-approve tfplan
+
+    - name: Read outputs
+      id: outputs
+      if: ${{ inputs.apply == 'true' }}
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      run: |
+        terraform output
+        echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
+        echo "token_minter_service_account=$(terraform output -raw token_minter_service_account)" >> "$GITHUB_OUTPUT"
+
+    - name: Remove generated sensitive files
+      if: ${{ always() }}
+      shell: bash
+      working-directory: token-minter-atman/terraform/token-minter
+      run: rm -f generated.auto.tfvars.json minter_impersonators.auto.tfvars.json tfplan
