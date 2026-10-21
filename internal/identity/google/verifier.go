@@ -6,7 +6,7 @@ import (
 
 	"cloud.google.com/go/auth/credentials/idtoken"
 
-	"github.com/xd-dash/atman/internal/identity"
+	"github.com/xd-dash/prajapati/internal/identity"
 )
 
 type Verifier struct{}

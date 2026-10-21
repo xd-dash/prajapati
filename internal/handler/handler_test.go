@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xd-dash/atman/internal/tenant"
+	"github.com/xd-dash/prajapati/internal/tenant"
 )
 
 type fakeMinter struct {
