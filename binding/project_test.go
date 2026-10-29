@@ -9,8 +9,8 @@ import (
 )
 
 type stubVerifier struct {
-	principal Principal
-	err       error
+	principal	Principal
+	err	error
 }
 
 func (v stubVerifier) Verify(_ context.Context, token, audience string) (Principal, error) {
