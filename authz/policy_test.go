@@ -80,3 +80,46 @@ func TestAuthorizeExactSemanticTuple(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthorizeEnforcesNetworkScope(t *testing.T) {
+	policy := Policy{
+		Version:   1,
+		Actions:   []string{"logma.pubsub.read"},
+		Resources: []string{"fatline-prod:tenant:acme:logma:pubsub:*"},
+		Audiences: []string{"https://fatline.internal/logma"},
+		Networks:  []string{"10.42.0.0/16", "fd42:4242::/48"},
+	}
+	base := Request{
+		Audience: "https://fatline.internal/logma",
+		Action:   "logma.pubsub.read",
+		Resource: "fatline-prod:tenant:acme:logma:pubsub:channel:events",
+	}
+	for name, ip := range map[string]string{"ipv4 in subnet": "10.42.7.9", "ipv6 in subnet": "fd42:4242::9"} {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			request.SourceIP = ip
+			if err := policy.Authorize(request); err != nil {
+				t.Fatalf("expected permitted source: %v", err)
+			}
+		})
+	}
+	for name, ip := range map[string]string{"outside subnet": "10.43.0.1", "missing source": "", "malformed source": "10.42.0.1/24"} {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			request.SourceIP = ip
+			if err := policy.Authorize(request); err == nil {
+				t.Fatal("expected network authorization denial")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidOrNonCanonicalNetwork(t *testing.T) {
+	profile, _ := ProfileFor("delegated-v1")
+	for _, network := range []string{"10.42.1.1/16", "10.42.0.0/33", "not-a-cidr"} {
+		policy := Policy{Version: 1, Networks: []string{network}}
+		if err := policy.Validate(profile); err == nil {
+			t.Errorf("expected invalid network %q to be rejected", network)
+		}
+	}
+}
