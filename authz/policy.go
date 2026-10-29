@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 )
 
@@ -141,6 +142,12 @@ func (p Policy) Validate(profile Profile) error {
 	if !ok || known.Capabilities != profile.Capabilities {
 		return fmt.Errorf("unknown auth profile %q", profile.ID)
 	}
+	for _, network := range p.Networks {
+		prefix, err := netip.ParsePrefix(network)
+		if err != nil || prefix != prefix.Masked() {
+			return fmt.Errorf("invalid or non-canonical authorization network %q", network)
+		}
+	}
 	if required := p.RequiredCapabilities(); required&^profile.Capabilities != 0 {
 		return fmt.Errorf("auth profile %q lacks capabilities %#x", profile.ID, required&^profile.Capabilities)
 	}
@@ -209,6 +216,9 @@ type Request struct {
 	Audience string
 	Action   string
 	Resource string
+	// SourceIP must come from the trusted transport peer or a proxy chain
+	// validated by the server. Never copy an untrusted header into this field.
+	SourceIP string
 }
 
 func contains(values []string, value string) bool {
@@ -227,6 +237,24 @@ func (p Policy) Authorize(request Request) error {
 	p = p.Normalize()
 	if request.Audience == "" || request.Action == "" || request.Resource == "" {
 		return errors.New("audience, action, and resource are required")
+	}
+	if len(p.Networks) != 0 {
+		ip, err := netip.ParseAddr(request.SourceIP)
+		if err != nil {
+			return errors.New("a valid source IP is required by this network-scoped policy")
+		}
+		ip = ip.Unmap()
+		allowed := false
+		for _, network := range p.Networks {
+			prefix, err := netip.ParsePrefix(network)
+			if err == nil && prefix.Contains(ip) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return errors.New("source IP is outside authorized networks")
+		}
 	}
 	if !contains(p.Audiences, request.Audience) {
 		return errors.New("audience is not authorized")
