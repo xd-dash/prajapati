@@ -38,8 +38,15 @@ type VerifiedProject struct {
 
 func (v *VerifiedProject) ProjectID() string { if v == nil {return ""}; return v.projectID }
 func (v *VerifiedProject) Authorize(action, resource string) error {
+ return v.AuthorizeFrom(action, resource, "")
+}
+
+// AuthorizeFrom evaluates a source network using an IP obtained from trusted
+// transport metadata. The caller must validate any trusted proxy chain before
+// passing the resulting peer address.
+func (v *VerifiedProject) AuthorizeFrom(action, resource, sourceIP string) error {
  if v == nil { return errors.New("verified binding required") }
- return v.policy.Authorize(authz.Request{Audience:v.audience,Action:action,Resource:resource})
+ return v.policy.Authorize(authz.Request{Audience:v.audience,Action:action,Resource:resource,SourceIP:sourceIP})
 }
 
 // Resolve requires an authenticated principal matching an explicitly configured,
