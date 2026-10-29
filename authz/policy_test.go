@@ -85,7 +85,7 @@ func TestAuthorizeEnforcesNetworkScope(t *testing.T) {
 	policy := Policy{
 		Version:   1,
 		Actions:   []string{"logma.pubsub.read"},
-		Resources: []string{"fatline-prod:tenant:acme:logma:pubsub:*"},
+		Resources: []string{"fatline-prod:tenant:acme:logma:pubsub:channel:events"},
 		Audiences: []string{"https://fatline.internal/logma"},
 		Networks:  []string{"10.42.0.0/16", "fd42:4242::/48"},
 	}
