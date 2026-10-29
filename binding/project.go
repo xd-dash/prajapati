@@ -10,8 +10,8 @@ import (
 
 // Principal is the authenticated identity returned by a trusted credential verifier.
 type Principal struct {
-	ID	string
-	Audience	string
+	ID       string
+	Audience string
 }
 
 // Verifier owns credential authentication, including signature, issuer, audience and expiry checks.
@@ -21,19 +21,19 @@ type Verifier interface {
 
 // ProjectBinding is configured authority, not a caller-supplied claim.
 type ProjectBinding struct {
-	ProjectID	string
-	PrincipalID	string
-	Audience	string
-	Profile	string
-	PolicyDigest	string
-	Policy	authz.Policy
+	ProjectID    string
+	PrincipalID  string
+	Audience     string
+	Profile      string
+	PolicyDigest string
+	Policy       authz.Policy
 }
 
 // VerifiedProject is issued only after credential verification and policy validation.
 type VerifiedProject struct {
-	projectID	string
-	audience	string
-	policy	authz.Policy
+	projectID string
+	audience  string
+	policy    authz.Policy
 }
 
 func (v *VerifiedProject) ProjectID() string {
